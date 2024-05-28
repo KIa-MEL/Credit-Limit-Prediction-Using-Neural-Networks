@@ -13,13 +13,14 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.ensemble import IsolationForest
-from scipy.stats.mstats import winsorize
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import PolynomialFeatures
 
 from torch.utils.data import Dataset
 from tqdm import *
 import pandas as pd
 from scipy.stats import boxcox
+from scipy.stats.mstats import winsorize
 
 
 class Dataset(Dataset):
@@ -38,8 +39,9 @@ class Dataset(Dataset):
         self.target_test = None
         self.num_features = None
         self.expanded_data_df = None
+        self.polynomial_features_data_df = None
         self.selected_feature_indices = None
-
+        self.dataset_mode = None
     def __len__(self):
         return len(self.data_df)
     
@@ -63,9 +65,12 @@ class Dataset(Dataset):
         return None
 
     def preprocess_data(self, drop_duplicates=True, handle_outliers='winsorize', handle_missing_values=True, test_size = 0.33,\
-                         random_state=45, pca = True, pca_k = 25, scaler = 'standard_scaler', feature_selection = True, features_score_plot=False, is_expanded=False):
-        if is_expanded:
+                        random_state=45, pca = True, pca_k = 25, scaler = 'standard_scaler', feature_selection = True,\
+                        features_score_plot=False, dataset_mode=None,):
+        if dataset_mode=='expanded':
                 self.preprocessed_data_df = self.expanded_data_df.copy()
+        elif dataset_mode=='polynomial_features':
+            self.preprocessed_data_df = self.polynomial_features_data_df.copy()
         else:
             self.preprocessed_data_df = self.data_df.copy()
         
@@ -83,22 +88,23 @@ class Dataset(Dataset):
 
 
 
+        if dataset_mode != 'polynomial_features':
+            
+            if handle_missing_values:
+                self.preprocessed_data_df = self.fix_missing_values(self.preprocessed_data_df,)
+            
+            self.preprocessed_data_df = self.fix_columns(self.preprocessed_data_df)
 
-        # if handle_missing_values:
-            # self.preprocessed_data_df = self.fix_missing_values(self.preprocessed_data_df,)
-        
-        # self.preprocessed_data_df = self.fix_columns(self.preprocessed_data_df)
 
+            cat_cols = list(self.data_df.select_dtypes(include='object').columns)
 
-        # cat_cols = list(self.data_df.select_dtypes(include='object').columns)
-
-        # self.preprocessed_data_df = pd.get_dummies(self.preprocessed_data_df, columns=cat_cols, drop_first=True)
+            self.preprocessed_data_df = pd.get_dummies(self.preprocessed_data_df, columns=cat_cols, drop_first=True)
 
 
         self.separate_features_and_target(self.preprocessed_data_df)
 
 
-        # self.data_df_with_outliers = self.detect_outliers_rf(self.preprocessed_data_df)
+        self.data_df_with_outliers = self.detect_outliers_rf(self.preprocessed_data_df)
 
         if handle_outliers == 'winsorize':
             self.X = self.handle_outlier_winsorize(self.X)
@@ -281,17 +287,22 @@ class Dataset(Dataset):
         self.target_train = self.target_train.to(device)
         self.target_test = self.target_test.to(device)
 
-    def fix_columns(self, df_to_fix):
+    def fix_columns(self, df_to_fix, drop_label=False):
         final_df = pd.DataFrame()
-
         data_df = self.data_df.iloc[:,:-1]
+
+        final_num_col = self.data_df.shape[1] - 1
+
+        if drop_label:
+            data_df = data_df.drop('Credit_Limit', axis=1)
+            final_num_col -= 1
 
         num_cols = data_df.select_dtypes(exclude='object').columns
         cat_cols = data_df.select_dtypes(include='object').columns
 
         for i in range(len(num_cols)):
             final_df[num_cols[i]] = df_to_fix[i]
-        for j in range(i + 1, 19):
+        for j in range(i + 1, final_num_col):
             final_df[cat_cols[j-i-1]] = df_to_fix[j]
         return final_df
     
@@ -349,9 +360,34 @@ class Dataset(Dataset):
 
         return synthetic_data_df
 
-    def save_expanded_dataset(self, path='../data/expanded_dataset'):
+    def save_expanded_dataset(self, path='../data/expanded_dataset.csv'):
+
         if self.expanded_data_df is not None:
             self.expanded_data_df.to_csv(path, index=False)
+        else:
+            raise Exception('No Expanded Dataset!')
+        return True
+    
+    def make_polynomial_features(self):
+        cat_cols = list(self.data_df.select_dtypes(include='object').columns)
+
+        X = self.data_df.drop([self.target_col], axis=1)
+        X = self.fix_missing_values(X)
+        X = self.fix_columns(X, drop_label=True)
+        X = pd.get_dummies(X, columns=cat_cols, drop_first=True)
+        cols = list(X.columns)
+
+        poly = PolynomialFeatures(degree=2, include_bias=False)
+        poly_features = poly.fit_transform(X)
+
+        poly_df = pd.DataFrame(poly_features, columns=poly.get_feature_names_out(cols))
+        poly_df[self.target_col] = self.data_df[self.target_col]
+
+        self.polynomial_features_data_df = poly_df
+        return poly_df
+    def save_polynomyal_features(self, path='../data/polynomial_dataset.csv'):
+        if self.polynomial_features_data_df is not None:
+            self.polynomial_features_data_df.to_csv(path, index=False)
         else:
             raise Exception('No Expanded Dataset!')
         return True
