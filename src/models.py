@@ -15,7 +15,7 @@ from pycaret.regression import *
 class OneLayerModel(nn.Module):
     def __init__(self, input_size, hidden_size, device):
 
-        super(TwoLayerModel, self).__init__()
+        super(OneLayerModel, self).__init__()
         self.dropout = nn.Dropout(0.05)
         self.linear1 = nn.Linear(input_size, hidden_size)
         self.leaky_reLu = nn.LeakyReLU()
@@ -147,7 +147,7 @@ class OneLayerModel(nn.Module):
         RMSE = math.sqrt(MSE)
         R2 = r2_score(y_pred, y_test)
         df = {
-            'Model' : ['TwoLayerModel'],
+            'Model' : ['OneLayerModel'],
             'MSE' : [MSE],
             'MAE' : [MAE],
             'RMSE' : [RMSE],
@@ -309,6 +309,7 @@ class TwoLayerModel(nn.Module):
         return pd.DataFrame(df)
 
 class ClassicModels(object):
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(ClassicModels, cls).__new__(cls)
@@ -329,3 +330,48 @@ class ClassicModels(object):
         evaluate_model(best)
         predict_holdout = predict_model(best)
         return predict_holdout
+    
+class ExtraTreeRegressor():
+    def __init__(self):
+        self.tt = None
+        self.model = None
+    def fit(self, X_train, y_train,):
+        cpu_device = torch.device("cpu")
+        X_train = X_train.to(cpu_device)
+        y_train = y_train.to(cpu_device)
+
+        reg = ExtraTreesRegressor(n_estimators=100, random_state=0)
+        reg.fit(X_train, y_train)
+        self.model = reg
+
+    def predict(self, X_test):
+ 
+
+        y_pred = self.model.predict(X_test)
+        return y_pred
+    
+    def test_report(self, X_test, y_test):
+        cpu_device = torch.device('cpu')
+ 
+
+        y_pred = self.predict(X_test)
+
+
+
+
+        
+
+        MSE = mean_squared_error(y_pred, y_test)
+        MAE = mean_absolute_error(y_pred, y_test)
+        RMSE = math.sqrt(MSE)
+        R2 = r2_score(y_pred, y_test)
+        df = {
+            'Model' : ['TwoLayerModel'],
+            'MSE' : [MSE],
+            'MAE' : [MAE],
+            'RMSE' : [RMSE],
+            'R2' : [R2],
+            'TT (Sec)' : [self.tt],
+        }
+        
+        return pd.DataFrame(df)
