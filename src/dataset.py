@@ -17,7 +17,7 @@ from scipy.stats.mstats import winsorize
 from sklearn.compose import ColumnTransformer
 
 from torch.utils.data import Dataset
-
+from tqdm import *
 import pandas as pd
 from scipy.stats import boxcox
 
@@ -29,17 +29,16 @@ class Dataset(Dataset):
 
         self.preprocessed_data_df = None
         self.data_df = None
-        self.data_df_with_outliers = None
-        
+        self.data_df_with_outliers = None      
         self.X = None
-        self.target = None
-        
+        self.target = None   
         self.X_train= None
         self.X_test = None
         self.target_train = None
         self.target_test = None
-
         self.num_features = None
+        self.expanded_data_df = None
+        self.selected_feature_indices = None
 
     def __len__(self):
         return len(self.data_df)
@@ -63,10 +62,12 @@ class Dataset(Dataset):
         self.target = data_df[self.target_col]
         return None
 
-    def preprocess_data(self, drop_duplicates=True, handle_outliers='winsorize', handle_missing_values=True, encode_categorical=True, test_size = 0.33,\
-                         random_state=45, pca = True, pca_k = 25, scaler = 'standard_scaler', feature_selection = True, features_score_plot=False):
-
-        self.preprocessed_data_df = self.data_df.copy()
+    def preprocess_data(self, drop_duplicates=True, handle_outliers='winsorize', handle_missing_values=True, test_size = 0.33,\
+                         random_state=45, pca = True, pca_k = 25, scaler = 'standard_scaler', feature_selection = True, features_score_plot=False, is_expanded=False):
+        if is_expanded:
+                self.preprocessed_data_df = self.expanded_data_df.copy()
+        else:
+            self.preprocessed_data_df = self.data_df.copy()
         
         # Drop duplicates
         if drop_duplicates:
@@ -82,19 +83,28 @@ class Dataset(Dataset):
 
 
 
+
+        # if handle_missing_values:
+            # self.preprocessed_data_df = self.fix_missing_values(self.preprocessed_data_df,)
+        
+        # self.preprocessed_data_df = self.fix_columns(self.preprocessed_data_df)
+
+
+        # cat_cols = list(self.data_df.select_dtypes(include='object').columns)
+
+        # self.preprocessed_data_df = pd.get_dummies(self.preprocessed_data_df, columns=cat_cols, drop_first=True)
+
+
         self.separate_features_and_target(self.preprocessed_data_df)
 
-        if handle_missing_values:
-            self.X = self.fix_missing_values_and_cat_encode(self.X, encode_categorical=encode_categorical)
-            self.preprocessed_data_df = self.fix_missing_values_and_cat_encode(self.preprocessed_data_df, encode_categorical=encode_categorical)
-            self.encoded = self.fix_missing_values_and_cat_encode(self.preprocessed_data_df, encode_categorical=encode_categorical)
-        self.data_df_with_outliers = self.detect_outliers_rf(self.preprocessed_data_df)
 
+        # self.data_df_with_outliers = self.detect_outliers_rf(self.preprocessed_data_df)
 
         if handle_outliers == 'winsorize':
             self.X = self.handle_outlier_winsorize(self.X)
             self.target = self.handle_outlier_winsorize(pd.DataFrame(self.target), lower_percentile=.2, upper_percentile=.2)
             self.preprocessed_data_df = self.handle_outlier_winsorize(self.preprocessed_data_df)
+        
         elif handle_outliers == 'log_transform':
             self.X = self.handle_outlier_log_transform(self.X)
             # self.target = self.handle_outlier_log_transform(pd.DataFrame(self.target))
@@ -102,6 +112,7 @@ class Dataset(Dataset):
 
         else:
             pass
+
         
         self.X_train, self.X_test, self.target_train, self.target_test = train_test_split(self.X, self.target, test_size=test_size, random_state=random_state)
         
@@ -126,7 +137,7 @@ class Dataset(Dataset):
 
         return None
     
-    def fix_missing_values_and_cat_encode(self, data_df, inplace=False, encode_categorical = True):
+    def fix_missing_values(self, data_df, inplace=False):
 
         if not inplace:
             data_tmp = data_df.copy()
@@ -140,13 +151,9 @@ class Dataset(Dataset):
         # Create transformers for numerical and categorical data
         num_transformer = IterativeImputer()
 
-        if encode_categorical: 
-            cat_transformer = Pipeline(steps=[
-                ('imputer', SimpleImputer(strategy='most_frequent')),
-                ('onehot', OneHotEncoder(handle_unknown='ignore'))
-            ])
-        else:
-            cat_transformer = SimpleImputer(strategy='most_frequent')
+        cat_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+        ])
 
         # Combine transformers into a ColumnTransformer
         fix_missings_and_cat_encode_preprocessor = ColumnTransformer(
@@ -229,6 +236,8 @@ class Dataset(Dataset):
 
         X_test_fs = fs.transform(self.X_test)
 
+        selected_feature_indices = fs.get_support(indices=True)
+        self.selected_feature_indices = selected_feature_indices
         return X_train_fs, X_test_fs, fs
     
     def calculate_features_score(self, show_plot = False):
@@ -272,4 +281,77 @@ class Dataset(Dataset):
         self.target_train = self.target_train.to(device)
         self.target_test = self.target_test.to(device)
 
+    def fix_columns(self, df_to_fix):
+        final_df = pd.DataFrame()
 
+        data_df = self.data_df.iloc[:,:-1]
+
+        num_cols = data_df.select_dtypes(exclude='object').columns
+        cat_cols = data_df.select_dtypes(include='object').columns
+
+        for i in range(len(num_cols)):
+            final_df[num_cols[i]] = df_to_fix[i]
+        for j in range(i + 1, 19):
+            final_df[cat_cols[j-i-1]] = df_to_fix[j]
+        return final_df
+    
+    def generate_similar_data(self, data_to_expand, num_samples, noise_level=0.1):
+        num_features = data_to_expand.shape[1]
+        synthetic_data = []
+
+        # Identify categorical columns
+        categorical_columns = data_to_expand.select_dtypes(include=['object']).columns
+
+        for _ in tqdm(range(num_samples)):
+            # Randomly select a row index from the original dataset
+            index = np.random.randint(0, len(data_to_expand))
+            # Select the row
+            original_row = data_to_expand.iloc[index].copy()  # Make a copy to avoid modifying original data
+            
+            # Add random noise to numerical features
+            noise_numeric = noise_level * np.random.randn(num_features-len(categorical_columns))
+            original_numeric = original_row.drop(categorical_columns)
+            new_numeric = original_numeric + noise_numeric
+            
+            # Generate synthetic data for categorical features
+            new_categorical = {}
+            for column in categorical_columns:
+                categories = data_to_expand[column].unique()
+                original_category = original_row[column]
+                new_category = np.random.choice(categories)
+                new_categorical[column] = new_category
+            
+            # Combine numerical and categorical features
+            new_row = pd.Series({**new_categorical, **dict(zip(original_numeric.index, new_numeric))})
+            synthetic_data.append(new_row)
+
+        # Create a DataFrame from the synthetic data
+        synthetic_df = pd.DataFrame(synthetic_data, columns=data_to_expand.columns)
+        return synthetic_df
+    
+    def expand_dataset(self, n_samples = 100000, noise_level = 0.1):
+        
+        data_df = self.data_df.copy()
+
+        data_df = self.fix_missing_values(data_df)
+        data_df = self.fix_columns(data_df)
+
+        upper=data_df['Credit_Limit'].quantile(0.4)
+        lower=data_df['Credit_Limit'].quantile(0.6)
+
+        index=data_df[(data_df['Credit_Limit']>=lower)|(data_df['Credit_Limit']<=upper)].index
+
+        data_df.drop(index,inplace=True)
+
+        synthetic_data_df = self.generate_similar_data(data_df, n_samples, noise_level,)
+
+        self.expanded_data_df = synthetic_data_df
+
+        return synthetic_data_df
+
+    def save_expanded_dataset(self, path='../data/expanded_dataset'):
+        if self.expanded_data_df is not None:
+            self.expanded_data_df.to_csv(path, index=False)
+        else:
+            raise Exception('No Expanded Dataset!')
+        return True
